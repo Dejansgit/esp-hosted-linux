@@ -44,6 +44,42 @@ menu "Example Configuration"
         help
             SPI controller to be used. HSPI->2, VSPI->3
 
+    config ESP_SPI_GPIO_MOSI
+        int "GPIO pin for MOSI (ESP32)"
+        depends on IDF_TARGET_ESP32 && ESP_SPI_HOST_INTERFACE
+        default 23 if ESP_SPI_CONTROLLER = 3
+        default 13
+        help
+            Host-to-ESP data line. The IO_MUX pin of the chosen controller by
+            default (HSPI 13, VSPI 23). Any input-capable GPIO (input-only
+            34..39 included) works through the GPIO matrix at a lower maximum
+            clock; keep the host's spi-max-frequency accordingly.
+
+    config ESP_SPI_GPIO_MISO
+        int "GPIO pin for MISO (ESP32)"
+        depends on IDF_TARGET_ESP32 && ESP_SPI_HOST_INTERFACE
+        default 19 if ESP_SPI_CONTROLLER = 3
+        default 12
+        help
+            ESP-to-host data line (HSPI 12, VSPI 19 by default). Must be an
+            output-capable GPIO.
+
+    config ESP_SPI_GPIO_SCLK
+        int "GPIO pin for SCLK (ESP32)"
+        depends on IDF_TARGET_ESP32 && ESP_SPI_HOST_INTERFACE
+        default 18 if ESP_SPI_CONTROLLER = 3
+        default 14
+        help
+            SPI clock from the host (HSPI 14, VSPI 18 by default).
+
+    config ESP_SPI_GPIO_CS
+        int "GPIO pin for CS (ESP32)"
+        depends on IDF_TARGET_ESP32 && ESP_SPI_HOST_INTERFACE
+        default 5 if ESP_SPI_CONTROLLER = 3
+        default 15
+        help
+            Chip select from the host (HSPI 15, VSPI 5 by default).
+
     config ESP_SPI_GPIO_HANDSHAKE
         int "GPIO pin for handshake"
         default 3 if IDF_TARGET_ESP32C2

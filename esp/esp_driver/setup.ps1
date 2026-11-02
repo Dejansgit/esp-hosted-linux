@@ -3,7 +3,7 @@ param(
     [switch]$Force,
     [Alias("u", "update-idf")]
     [switch]$UpdateIdf,
-    [Alias("h", "help")]
+    [Alias("h")]
     [switch]$Help
 )
 

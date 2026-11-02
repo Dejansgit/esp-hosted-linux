@@ -61,19 +61,19 @@ uint8_t g_spi_mode = SPI_MODE_2;
 
 #if (CONFIG_ESP_SPI_CONTROLLER == 3)
 #define ESP_SPI_CONTROLLER  2
-#define GPIO_MOSI       23
-#define GPIO_MISO       19
-#define GPIO_SCLK       18
-#define GPIO_CS         5
 #elif (CONFIG_ESP_SPI_CONTROLLER == 2)
 #define ESP_SPI_CONTROLLER  1
-#define GPIO_MISO       12
-#define GPIO_MOSI       13
-#define GPIO_SCLK       14
-#define GPIO_CS         15
 #else
 #error "Please choose correct SPI controller"
 #endif
+
+/* Data pins come from menuconfig; the defaults are the controller's IO_MUX
+ * pins (HSPI 13/12/14/15, VSPI 23/19/18/5). Other pins go through the GPIO
+ * matrix: fine for a slave, at a lower maximum clock. */
+#define GPIO_MOSI       CONFIG_ESP_SPI_GPIO_MOSI
+#define GPIO_MISO       CONFIG_ESP_SPI_GPIO_MISO
+#define GPIO_SCLK       CONFIG_ESP_SPI_GPIO_SCLK
+#define GPIO_CS         CONFIG_ESP_SPI_GPIO_CS
 
 #define DMA_CHAN            ESP_SPI_CONTROLLER
 
