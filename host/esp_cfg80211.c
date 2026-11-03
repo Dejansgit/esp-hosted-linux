@@ -2808,7 +2808,12 @@ int esp_add_wiphy(struct esp_adapter *adapter)
 	/* ESP scan supports at most 1 SSID, no probe request IEs, and no scheduled scans */
 	wiphy->max_scan_ssids = 1;
 	/*	wiphy->max_match_sets = 10;*/
-	wiphy->max_scan_ie_len = 0;
+	/* wpa_supplicant 2.10 (Yocto, xWave Edge) always puts an Extended
+	 * Capabilities element into its scan requests; with 0 here cfg80211
+	 * refuses every scan with -EINVAL before the driver sees it. The
+	 * firmware scans by itself and takes no IEs, so cmd_scan_request
+	 * drops them. */
+	wiphy->max_scan_ie_len = 256;
 	wiphy->max_sched_scan_ssids = 0;
 	wiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
 #ifdef CONFIG_PM

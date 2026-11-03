@@ -3386,8 +3386,9 @@ int cmd_scan_request(struct esp_wifi_device *priv, struct cfg80211_scan_request 
 	}
 
 	if (request->ie && request->ie_len) {
-		esp_err("Scan IEs not supported\n");
-		return -EOPNOTSUPP;
+		/* The firmware scans by itself; probe-request extensions from the
+		 * supplicant (Extended Capabilities, WPS, P2P) are dropped. */
+		esp_dbg("Scan IEs (%zu bytes) ignored\n", request->ie_len);
 	}
 
 	if (request->n_channels > 1) {
