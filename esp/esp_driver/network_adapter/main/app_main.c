@@ -32,6 +32,9 @@
 #include "esp_private/wifi.h"
 #include "esp.h"
 #include "interface.h"
+#if CONFIG_XWAVE_MESH
+#include "xwave_mesh.h"
+#endif
 #if CONFIG_ESP_SDIO_HOST_INTERFACE
 #include "sdio_slave_api.h"
 #endif
@@ -1644,6 +1647,13 @@ void process_rx_pkt(interface_buffer_handle_t *buf_handle)
 #endif
         /*ESP_LOG_BUFFER_HEXDUMP("SDIO Rx", payload, payload_len, ESP_LOG_INFO);*/
 
+#if CONFIG_XWAVE_MESH
+        /* xWave: an Ethernet frame from Linux's mesh0 into the ESP's own stack */
+        if (header->if_type == ESP_MESH_IF) {
+            if (header->packet_type == PACKET_TYPE_DATA)
+                xwave_mesh_rx_from_host(payload, payload_len);
+        } else
+#endif
 #ifdef CONFIG_ESP_HOSTED_RCP
         if (header->if_type == ESP_RCP_IF) {
             if (header->packet_type == PACKET_TYPE_RCP_SESSION) {

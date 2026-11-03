@@ -63,3 +63,14 @@ CONFIG_ESP_SPI_GPIO_CS=34
 # that transaction ends with 0 bits when CS rises, and its frame is lost (seen
 # on the bench 2026-11-03: 9 of 10 replies lost).
 CONFIG_ESP_SPI_DEASSERT_HS_ON_CS=y
+# Mesh mode (W8): the ESP's own TCP/IP stack forwards and translates between
+# the link to Linux, the mesh and a router.
+CONFIG_XWAVE_MESH=y
+CONFIG_XWAVE_MESH_ROUTE_TABLE_SIZE=50
+CONFIG_LWIP_IP_FORWARD=y
+CONFIG_LWIP_IPV4_NAPT=y
+CONFIG_LWIP_L2_TO_L3_COPY=y
+
+# No Bluetooth on the Edge: the product does not use it and the mesh stack
+# needs the flash it took (W8).
+# CONFIG_BT_ENABLED is not set

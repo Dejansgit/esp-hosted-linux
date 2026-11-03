@@ -16,6 +16,9 @@
 #include "esp.h"
 #include "cmd.h"
 #include "adapter.h"
+#if CONFIG_XWAVE_MESH
+#include "xwave_mesh.h"
+#endif
 #include "endian.h"
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
@@ -1514,6 +1517,14 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     if (event_base != WIFI_EVENT) {
         ESP_LOGI(TAG, "Received unregistered event %s[%lu]\n", event_base, event_id);
         return;
+    }
+#if CONFIG_XWAVE_MESH
+    /* the mesh stack owns the radio: its station/AP events are not the
+     * hosted link's and must not reach cfg80211 */
+    if (xwave_mesh_active()) {
+        ESP_LOGD(TAG, "mesh mode: Wi-Fi event %lu kept from the host", event_id);
+        return;
+#endif
     }
 
     switch (event_id) {
@@ -4517,7 +4528,30 @@ struct esp_cmd_entry {
     const char    *name;
 };
 
+#if CONFIG_XWAVE_MESH
+/* xWave: CMD_XWAVE_MESH, mesh mode on/off/query; the answer is the status */
+static int process_xwave_mesh(uint8_t if_type, uint8_t *payload, uint16_t payload_len)
+{
+    const struct cmd_xwave_mesh *req = (const struct cmd_xwave_mesh *)payload;
+    struct xwave_mesh_status st;
+    uint8_t status = CMD_RESPONSE_SUCCESS;
+
+    if (req->mode != XWAVE_MESH_QUERY) {
+        esp_err_t ret = xwave_mesh_apply(req);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "xwave mesh mode %u: %s", req->mode, esp_err_to_name(ret));
+            status = CMD_RESPONSE_FAIL;
+        }
+    }
+    xwave_mesh_get_status(&st);
+    return send_command_resp(if_type, CMD_XWAVE_MESH, status, (uint8_t *)&st, sizeof(st));
+}
+#endif
+
 static const struct esp_cmd_entry s_cmd_table[] = {
+#if CONFIG_XWAVE_MESH
+    { CMD_XWAVE_MESH,          sizeof(struct cmd_xwave_mesh),          process_xwave_mesh,         "XWAVE_MESH" },
+#endif
     { CMD_INIT_INTERFACE,      0,                                      process_init_interface,     "INIT_IF" },
     { CMD_SET_MAC,             sizeof(struct cmd_config_mac_address),  process_set_mac,            "SET_MAC" },
     { CMD_GET_MAC,             0,                                      process_get_mac,            "GET_MAC" },

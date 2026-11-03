@@ -12,6 +12,12 @@ if(CONFIG_ESP_HOSTED_RCP)
     endif()
 endif()
 
+if(CONFIG_XWAVE_MESH)
+    # xWave: ESP-WIFI-MESH mode with the ESP's own TCP/IP stack (docs/WiFi-Plan.md 7.1)
+    list(APPEND COMPONENT_SRCS "xwave_mesh.c")
+    list(APPEND COMPONENT_REQUIRES esp_netif lwip esp_event esp_wifi)
+endif()
+
 if(CONFIG_ESP_THREAD_RCP_UART)
     list(APPEND COMPONENT_SRCS "thread_rcp_uart.c")
     list(APPEND COMPONENT_REQUIRES openthread esp_coex vfs esp_event)

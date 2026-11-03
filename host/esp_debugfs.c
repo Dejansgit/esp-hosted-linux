@@ -1,3 +1,4 @@
+#include "esp_xwave_mesh.h"
 #include "utils.h"
 #include <linux/debugfs.h>
 #include <linux/err.h>
@@ -285,6 +286,7 @@ int debugfs_init(void)
 	}
 
 	debugfs->version = debugfs_create_file(VERSION, 0644, debugfs->debugfs_dir, NULL, &version_ops);
+	debugfs_create_file("xwave_mesh", 0600, debugfs->debugfs_dir, NULL, &esp_xwave_mesh_debugfs_ops);   /* xWave: mesh mode control */
 	if (IS_ERR_OR_NULL(debugfs->version)) {
 		esp_warn("Failed to create debugfs %s file\n", VERSION);
 		debugfs->version = NULL;

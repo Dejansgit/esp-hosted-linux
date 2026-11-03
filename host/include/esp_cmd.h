@@ -42,6 +42,9 @@ int cmd_scan_request(struct esp_wifi_device *priv,
 		struct cfg80211_scan_request *request);
 int cmd_get_mac(struct esp_wifi_device *priv);
 int cmd_set_mac(struct esp_wifi_device *priv, uint8_t *mac_addr);
+/* xWave: mesh mode on/off/query; the firmware's status comes back in *st */
+int cmd_xwave_mesh(struct esp_adapter *adapter, const struct cmd_xwave_mesh *req,
+		   struct xwave_mesh_status *st);
 int cmd_get_rssi(struct esp_wifi_device *priv);
 int process_cmd_event(struct esp_wifi_device *priv, struct sk_buff *skb);
 int cmd_connect_request(struct esp_wifi_device *priv,

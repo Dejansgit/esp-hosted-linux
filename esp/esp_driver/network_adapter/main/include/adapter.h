@@ -76,6 +76,9 @@ enum ESP_INTERFACE_TYPE {
 	/* Stack-agnostic 802.15.4 RCP byte stream (Spinel/HDLC). */
 	ESP_RCP_IF,
 	ESP_MONITOR_IF,
+	/* xWave: Ethernet frames between Linux (mesh0) and the ESP's own TCP/IP
+	 * stack while the ESP runs ESP-WIFI-MESH (xwave_mesh.c). */
+	ESP_MESH_IF,
 	ESP_MAX_IF,
 };
 
@@ -217,6 +220,7 @@ enum COMMAND_CODE {
 	CMD_MONITOR_CONFIG = 37,
 	/* QSPI raw-bidirectional test; new append-only ID after master commands. */
 	CMD_RAW_TP_BIDIRECTIONAL = 38,
+	CMD_XWAVE_MESH = 40,            /* xWave: ESP-WIFI-MESH mode on/off/query */
 	CMD_MAX,
 };
 
@@ -582,6 +586,57 @@ struct fw_version {
 	uint8_t    minor;
 	uint8_t    revision_patch_1;
 	uint8_t    revision_patch_2;
+} __packed;
+
+/* xWave: CMD_XWAVE_MESH. Linux (xwave-wifi) switches the ESP between the
+ * hosted service (cfg80211 on wlan0) and ESP-WIFI-MESH, where the ESP runs
+ * the mesh stack with its own TCP/IP and NAT and Linux sees one Ethernet
+ * link (ESP_MESH_IF, mesh0) with a /30 between link_ip and host_ip. Node:
+ * joins the group whose mesh_id/mesh_password match; Linux's traffic goes
+ * out through the node's mesh address. Root: owns the group on `channel`
+ * (router_ssid empty = no router at the site, Linux is the mesh's upstream;
+ * router_ssid set = the root also joins that router as a station and gets
+ * Linux a Wi-Fi uplink). The response carries xwave_mesh_status.
+ * docs/WiFi-Plan.md 7.1. */
+#define XWAVE_MESH_ID_LEN       6
+#define XWAVE_MESH_PW_LEN       64
+#define XWAVE_MESH_SSID_LEN     32
+
+enum xwave_mesh_mode {
+	XWAVE_MESH_OFF   = 0,   /* hosted service */
+	XWAVE_MESH_NODE  = 1,
+	XWAVE_MESH_ROOT  = 2,
+	XWAVE_MESH_QUERY = 0xFF /* change nothing, answer the status */
+};
+
+struct cmd_xwave_mesh {
+	struct command_header header;
+	uint8_t    mode;                        /* enum xwave_mesh_mode */
+	uint8_t    channel;                     /* root: 1-13; 0 = follow the router */
+	uint8_t    max_connection;              /* children per node (H743: 6) */
+	uint8_t    max_layer;                   /* H743: 6 */
+	uint8_t    mesh_id[XWAVE_MESH_ID_LEN];
+	uint8_t    link_ip[4];                  /* the ESP's address on the link */
+	uint8_t    host_ip[4];                  /* Linux's address, the ESP's gateway without a router */
+	uint8_t    link_prefix;                 /* 30 */
+	uint8_t    reserved[3];
+	char       mesh_password[XWAVE_MESH_PW_LEN];
+	char       router_ssid[XWAVE_MESH_SSID_LEN];
+	char       router_password[XWAVE_MESH_PW_LEN];
+} __packed;
+
+struct xwave_mesh_status {
+	uint8_t    mode;                        /* enum xwave_mesh_mode in force */
+	uint8_t    is_root;
+	uint8_t    layer;                       /* 0 = not connected, 1 = root */
+	uint8_t    parent_connected;
+	uint8_t    parent[6];                   /* the parent's BSSID (node) or zero */
+	uint8_t    mesh_ip[4];                  /* the node's address in the mesh / the root's AP address */
+	uint8_t    router_ip[4];                /* the root's station address, zero without a router */
+	uint8_t    children;                    /* direct children (root: routing table size - 1) */
+	uint8_t    tods_reachable;
+	uint16_t   route_table_size;
+	uint32_t   free_heap;
 } __packed;
 
 struct fw_data {

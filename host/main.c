@@ -20,6 +20,7 @@
 #include "esp_bt_api.h"
 #include "esp_rcp_api.h"
 #include "esp_api.h"
+#include "esp_xwave_mesh.h"
 #include "esp_cmd.h"
 #include "esp_kernel_port.h"
 #include "esp_fw_version.h"
@@ -1701,6 +1702,9 @@ int esp_add_card(struct esp_adapter *adapter)
 	ret = esp_add_network_ifaces(adapter);
 	if (ret)
 		goto rollback_wiphy;
+	/* xWave: mesh0 lives as long as the module; a failure only costs the mesh mode */
+	if (esp_xwave_mesh_init(adapter))
+		esp_warn("xwave mesh0 not registered\n");
 
 	clear_bit(ESP_CLEANUP_IN_PROGRESS, &adapter->state_flags);
 	return 0;
@@ -1830,6 +1834,7 @@ int esp_remove_card(struct esp_adapter *adapter, bool notify_fw)
 	esp_deinit_rcp(adapter);
 	esp_deinit_bt(adapter);
 	esp_commands_teardown(adapter);
+	esp_xwave_mesh_deinit(adapter);
 	esp_remove_network_ifaces(adapter);
 	if (preserve_monitor_wiphy) {
 		esp_info("MONITOR_VIF_INPLACE_PRESERVED across firmware restart\n");
@@ -2238,6 +2243,9 @@ static void process_rx_packet(struct esp_adapter *adapter, struct sk_buff *skb)
 			queue_work(adapter->events_wq, &adapter->events_work);
 		else
 			dev_kfree_skb_any(skb);
+	} else if (payload_header->if_type == ESP_MESH_IF) {
+		/* xWave: an Ethernet frame from the ESP's own stack for mesh0 */
+		esp_xwave_mesh_rx(adapter, skb);
 	} else if (payload_header->if_type == ESP_TEST_IF) {
 #if TEST_RAW_TP
 		if (raw_tp_mode != 0)

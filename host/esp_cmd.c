@@ -914,6 +914,30 @@ static int queue_cmd_node(struct esp_adapter *adapter,
 	return 0;
 }
 
+/* xWave: CMD_XWAVE_MESH answers with struct xwave_mesh_status after the
+ * command header; kept for cmd_xwave_mesh() to hand back */
+static struct xwave_mesh_status s_xwave_mesh_status;
+
+static int decode_xwave_mesh(struct command_node *cmd_node)
+{
+	struct command_header *h;
+	int ret = 0;
+
+	if (!cmd_node || !cmd_node->resp_skb || !cmd_node->resp_skb->data ||
+	    cmd_node->resp_skb->len < sizeof(*h))
+		return -EINVAL;
+	h = (struct command_header *)cmd_node->resp_skb->data;
+	if (h->cmd_status != CMD_RESPONSE_SUCCESS) {
+		esp_info("xwave mesh command refused by the firmware\n");
+		ret = -EIO;
+	}
+	if (cmd_node->resp_skb->len >= sizeof(*h) + sizeof(s_xwave_mesh_status) &&
+	    esp_wire_le16_to_cpu(h->len) >= sizeof(s_xwave_mesh_status))
+		memcpy(&s_xwave_mesh_status, cmd_node->resp_skb->data + sizeof(*h),
+		       sizeof(s_xwave_mesh_status));
+	return ret;
+}
+
 static int decode_mac_addr(struct esp_wifi_device *priv,
 		struct command_node *cmd_node)
 {
@@ -1413,6 +1437,10 @@ static int wait_and_decode_cmd_resp(struct esp_wifi_device *priv,
 	case CMD_SET_MAC:
 		if (ret == 0)
 			ret = decode_mac_addr(priv, cmd_node);
+		break;
+	case CMD_XWAVE_MESH:
+		if (ret == 0)
+			ret = decode_xwave_mesh(cmd_node);
 		break;
 	case CMD_DISCONNECT:
 		if (ret == 0)
@@ -3703,6 +3731,31 @@ int cmd_set_mac(struct esp_wifi_device *priv, uint8_t *mac_addr)
 
 	RET_ON_FAIL(wait_and_decode_cmd_resp(priv, cmd_node));
 	return 0;
+}
+
+/* xWave: mesh mode on/off/query (docs/WiFi-Plan.md 7.1) */
+int cmd_xwave_mesh(struct esp_adapter *adapter, const struct cmd_xwave_mesh *req,
+		   struct xwave_mesh_status *st)
+{
+	struct esp_wifi_device *priv = adapter ? adapter->priv[0] : NULL;
+	struct command_node *cmd_node = NULL;
+	struct cmd_xwave_mesh *cmd;
+	int ret;
+
+	if (!priv || !priv->adapter || !req)
+		return -EINVAL;
+	cmd_node = prepare_command_request(adapter, CMD_XWAVE_MESH, sizeof(*cmd));
+	if (IS_ERR_OR_NULL(cmd_node))
+		return cmd_prepare_err(cmd_node);
+	cmd = (struct cmd_xwave_mesh *)(cmd_node->cmd_skb->data + sizeof(struct esp_payload_header));
+	memcpy((u8 *)cmd + sizeof(struct command_header),
+	       (const u8 *)req + sizeof(struct command_header),
+	       sizeof(*cmd) - sizeof(struct command_header));
+	queue_cmd_node(adapter, cmd_node, ESP_CMD_DFLT_PRIO);
+	ret = wait_and_decode_cmd_resp(priv, cmd_node);
+	if (st)
+		*st = s_xwave_mesh_status;
+	return ret;
 }
 
 int cmd_set_mode(struct esp_wifi_device *priv, uint8_t mode)

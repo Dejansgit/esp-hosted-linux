@@ -127,6 +127,23 @@ menu "Example Configuration"
     endmenu
 
 
+    menu "xWave mesh mode"
+        config XWAVE_MESH
+            bool "ESP-WIFI-MESH mode (CMD_XWAVE_MESH, ESP_MESH_IF)"
+            default y
+            depends on IDF_TARGET_ESP32
+            help
+                The ESP runs the ESP-WIFI-MESH stack as node or root with its own
+                TCP/IP stack and NAT; Linux sees one Ethernet link (mesh0).
+                xWave Edge, docs/WiFi-Plan.md 7.1. Needs LWIP_IP_FORWARD,
+                LWIP_IPV4_NAPT and LWIP_L2_TO_L3_COPY.
+
+        config XWAVE_MESH_ROUTE_TABLE_SIZE
+            int "Routing table size of a root"
+            default 50
+            depends on XWAVE_MESH
+    endmenu
+
     menu "SPI Half-duplex/QIO Configuration"
         depends on ESP_SPI_HD_HOST_INTERFACE
 
