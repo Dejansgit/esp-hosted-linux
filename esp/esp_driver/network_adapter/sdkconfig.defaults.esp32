@@ -58,3 +58,8 @@ CONFIG_ESP_SPI_GPIO_MOSI=36
 CONFIG_ESP_SPI_GPIO_MISO=4
 CONFIG_ESP_SPI_GPIO_SCLK=35
 CONFIG_ESP_SPI_GPIO_CS=34
+# The STM32MP1 SPI driver releases its GPIO chip select some time after the last
+# clock. Without this the slave arms the next transaction while CS is still low,
+# that transaction ends with 0 bits when CS rises, and its frame is lost (seen
+# on the bench 2026-11-03: 9 of 10 replies lost).
+CONFIG_ESP_SPI_DEASSERT_HS_ON_CS=y

@@ -184,6 +184,30 @@ static interface_context_t context;
 static interface_handle_t if_handle_g;
 static uint8_t gpio_handshake = CONFIG_ESP_SPI_GPIO_HANDSHAKE;
 static uint8_t gpio_data_ready = CONFIG_ESP_SPI_GPIO_DATA_READY;
+
+/* Handshake and data-ready writes. GPIO_OUT_W1TS/W1TC cover GPIO 0-31 only;
+ * GPIO 32-39 live in GPIO_OUT1_W1TS/W1TC. A (1ULL << 32) written to the 32-bit
+ * low register is silently zero, so a data-ready pin above 31 never moved. */
+static inline void IRAM_ATTR hosted_gpio_set(uint8_t gpio)
+{
+    if (gpio < 32)
+        WRITE_PERI_REG(GPIO_OUT_W1TS_REG, BIT(gpio));
+    else
+        WRITE_PERI_REG(GPIO_OUT1_W1TS_REG, BIT(gpio - 32));
+}
+
+static inline void IRAM_ATTR hosted_gpio_clear(uint8_t gpio)
+{
+    if (gpio < 32)
+        WRITE_PERI_REG(GPIO_OUT_W1TC_REG, BIT(gpio));
+    else
+        WRITE_PERI_REG(GPIO_OUT1_W1TC_REG, BIT(gpio - 32));
+}
+
+/* Bench trace of the transaction slots (xWave bring-up), off in production. */
+#ifndef XWAVE_SLOT_TRACE
+#define XWAVE_SLOT_TRACE 0
+#endif
 static QueueHandle_t spi_rx_queue[MAX_PRIORITY_QUEUES] = {NULL};
 static QueueHandle_t spi_tx_queue[MAX_PRIORITY_QUEUES] = {NULL};
 
@@ -250,7 +274,7 @@ static void IRAM_ATTR gpio_disable_hs_isr_handler(void* arg)
     int level = gpio_get_level(GPIO_CS);
     if (level == 0) {
         /* CS is asserted, disable HS */
-        WRITE_PERI_REG(GPIO_OUT_W1TC_REG, (1ULL << gpio_handshake));
+        hosted_gpio_clear(gpio_handshake);
     } else {
         /* Last transaction complete, populate next one */
         if (wait_cs_deassert_sem)
@@ -395,7 +419,7 @@ esp_err_t send_bootup_event_to_host(uint32_t cap, uint32_t ext_cap)
     xQueueSend(spi_tx_queue[PRIO_Q_HIGH], &buf_handle, portMAX_DELAY);
 
     /* indicate waiting data on ready pin */
-    WRITE_PERI_REG(GPIO_OUT_W1TS_REG, (1ULL << gpio_data_ready));
+    hosted_gpio_set(gpio_data_ready);
     /* process first data packet here to start transactions */
     queue_next_transaction();
 
@@ -406,7 +430,7 @@ esp_err_t send_bootup_event_to_host(uint32_t cap, uint32_t ext_cap)
 static void IRAM_ATTR spi_post_setup_cb(spi_slave_transaction_t *trans)
 {
     /* ESP peripheral ready for spi transaction. Set hadnshake line high. */
-    WRITE_PERI_REG(GPIO_OUT_W1TS_REG, (1ULL << gpio_handshake));
+    hosted_gpio_set(gpio_handshake);
 }
 
 /* Invoked after transaction is sent/received.
@@ -415,7 +439,7 @@ static void IRAM_ATTR spi_post_trans_cb(spi_slave_transaction_t *trans)
 {
 #if !HS_DEASSERT_ON_CS
     /* Clear handshake line */
-    WRITE_PERI_REG(GPIO_OUT_W1TC_REG, (1ULL << gpio_handshake));
+    hosted_gpio_clear(gpio_handshake);
 #endif
 }
 
@@ -668,7 +692,7 @@ static void queue_next_transaction(void)
         }
 
         /* Current transaction has data for host: assert data_ready */
-        WRITE_PERI_REG(GPIO_OUT_W1TS_REG, (1ULL << gpio_data_ready));
+        hosted_gpio_set(gpio_data_ready);
     } else {
         /* No pending frame: prepare dummy header */
         memset(slot->dma_tx, 0, RX_BUF_SIZE);
@@ -681,7 +705,7 @@ static void queue_next_transaction(void)
         if (!uxQueueMessagesWaiting(spi_tx_queue[PRIO_Q_HIGH]) &&
             !uxQueueMessagesWaiting(spi_tx_queue[PRIO_Q_MID]) &&
             !uxQueueMessagesWaiting(spi_tx_queue[PRIO_Q_LOW])) {
-            WRITE_PERI_REG(GPIO_OUT_W1TC_REG, (1ULL << gpio_data_ready));
+            hosted_gpio_clear(gpio_data_ready);
         }
     }
 
@@ -693,6 +717,12 @@ static void queue_next_transaction(void)
     slot->trans.user = slot;
     slot->trans.length = RX_BUF_SIZE * SPI_BITS_PER_WORD;
 
+#if XWAVE_SLOT_TRACE
+    ESP_LOGI(TAG, "arm slot %d %s tx %02x %02x %02x %02x %02x %02x %02x %02x",
+             (int)(slot - s_slots), has_tx ? "data " : "dummy",
+             slot->dma_tx[0], slot->dma_tx[1], slot->dma_tx[2], slot->dma_tx[3],
+             slot->dma_tx[4], slot->dma_tx[5], slot->dma_tx[6], slot->dma_tx[7]);
+#endif
     ret = spi_slave_queue_trans(ESP_SPI_CONTROLLER, &slot->trans, portMAX_DELAY);
     if (ret != ESP_OK) {
         /* Invariant: Once a real E2H state/control frame is dequeued, either that exact frame
@@ -741,6 +771,15 @@ static void spi_transaction_post_process_task(void* pvParameters)
         } else {
             slot = NULL;
         }
+#if XWAVE_SLOT_TRACE
+        if (spi_trans) {
+            const uint8_t *r = (const uint8_t *)spi_trans->rx_buffer;
+            ESP_LOGI(TAG, "done slot %d ret %d bits %u rx %02x %02x %02x %02x %02x %02x %02x %02x",
+                     slot ? (int)(slot - s_slots) : -1, (int)ret, (unsigned)spi_trans->trans_len,
+                     r ? r[0] : 0, r ? r[1] : 0, r ? r[2] : 0, r ? r[3] : 0,
+                     r ? r[4] : 0, r ? r[5] : 0, r ? r[6] : 0, r ? r[7] : 0);
+        }
+#endif
 
         /* CMD35 is a reincarnation fence only after its ACK transaction
          * completed successfully. If that transaction failed, no reboot was
@@ -856,8 +895,8 @@ static interface_handle_t * esp_spi_init(void)
     /* Configure handshake and data_ready lines as output */
     gpio_config(&io_conf);
     gpio_config(&io_data_ready_conf);
-    WRITE_PERI_REG(GPIO_OUT_W1TC_REG, (1ULL << gpio_handshake));
-    WRITE_PERI_REG(GPIO_OUT_W1TC_REG, (1ULL << gpio_data_ready));
+    hosted_gpio_clear(gpio_handshake);
+    hosted_gpio_clear(gpio_data_ready);
 
     /* Enable pull-ups on SPI lines
      * so that no rogue pulses when no master is connected
@@ -1094,7 +1133,7 @@ static int32_t esp_spi_write(interface_handle_t *handle, interface_buffer_handle
     }
 
     /* indicate waiting data on ready pin */
-    WRITE_PERI_REG(GPIO_OUT_W1TS_REG, (1ULL << gpio_data_ready));
+    hosted_gpio_set(gpio_data_ready);
 
     return buf_handle->payload_len;
 }
