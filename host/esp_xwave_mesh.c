@@ -238,6 +238,7 @@ static ssize_t mesh_debugfs_write(struct file *file, const char __user *ubuf, si
 			if (!strcmp(val, "off")) req.mode = XWAVE_MESH_OFF;
 			else if (!strcmp(val, "node")) req.mode = XWAVE_MESH_NODE;
 			else if (!strcmp(val, "root")) req.mode = XWAVE_MESH_ROOT;
+			else if (!strcmp(val, "switch")) req.mode = XWAVE_MESH_SWITCH_IMAGE;
 			else if (!strcmp(val, "query")) req.mode = XWAVE_MESH_QUERY;
 			else ret = -EINVAL;
 		} else if (!strcmp(tok, "id")) {
@@ -313,7 +314,8 @@ static ssize_t mesh_debugfs_read(struct file *file, char __user *ubuf, size_t co
 		n = scnprintf(out, sizeof(out), "mode=unknown error=%d\n", ret);
 	else
 		n = scnprintf(out, sizeof(out),
-			      "mode=%s root=%u layer=%u parent_connected=%u parent=%pM mesh_ip=%pI4 router_ip=%pI4 children=%u route_table=%u tods=%u free_heap=%u\n",
+			      "image=%s mode=%s root=%u layer=%u parent_connected=%u parent=%pM mesh_ip=%pI4 router_ip=%pI4 children=%u route_table=%u tods=%u free_heap=%u\n",
+			      st.image ? "mesh" : "hosted",
 			      st.mode == XWAVE_MESH_OFF ? "off" : st.mode == XWAVE_MESH_NODE ? "node" :
 			      st.mode == XWAVE_MESH_ROOT ? "root" : "?",
 			      st.is_root, st.layer, st.parent_connected, st.parent, st.mesh_ip, st.router_ip,

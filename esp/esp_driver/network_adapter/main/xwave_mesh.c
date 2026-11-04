@@ -33,6 +33,7 @@
 #include "esp_event.h"
 #include "esp_mesh.h"
 #include "esp_mac.h"
+#include "esp_ota_ops.h"
 #include "lwip/lwip_napt.h"
 #include "dhcpserver/dhcpserver.h"
 #include "interface.h"
@@ -40,6 +41,11 @@
 #include "xwave_mesh.h"
 
 static const char *TAG = "XWAVE_MESH";
+
+/* cmd.c wraps esp_supplicant_init() with the host-driven supplicant; this is
+ * IDF's own, and the unregister of whatever is installed (esp_private) */
+esp_err_t __real_esp_supplicant_init(void);
+int esp_wifi_unregister_wpa_cb_internal(void);
 
 #define MESH_RX_SIZE            1560
 #define LINK_MAX_FRAME          1600
@@ -339,6 +345,68 @@ static void node_sta_stop(void)
 
 /* ── events ───────────────────────────────────────────────────────────── */
 
+/* A root with a router: the manual designation of the IDF example
+ * manual_networking. The mesh stack does not take a fixed root to its router
+ * by itself (seen on the bench 2026-11-03), so the root scans for the SSID
+ * and names the router as its parent; without the router in range it falls
+ * back to the router-less root so the group still works, and tries again
+ * every minute. Runs in its own task: no scanning from an event handler. */
+static void root_router_task(void *arg)
+{
+    wifi_scan_config_t scan = { .ssid = (uint8_t *)s_cfg.router_ssid, .show_hidden = true };
+    wifi_ap_record_t *recs = NULL;
+    uint16_t n = 0;
+    bool fallback = false;
+
+    while (s_active && s_root && s_router) {
+        if (esp_wifi_scan_start(&scan, true) == ESP_OK) {
+            esp_wifi_scan_get_ap_num(&n);
+            if (n) {
+                recs = calloc(n, sizeof(*recs));
+                if (recs && esp_wifi_scan_get_ap_records(&n, recs) == ESP_OK) {
+                    int best = -1;
+                    for (int i = 0; i < n; i++)
+                        if (!strcmp((char *)recs[i].ssid, s_cfg.router_ssid) &&
+                            (best < 0 || recs[i].rssi > recs[best].rssi))
+                            best = i;
+                    if (best >= 0) {
+                        wifi_config_t parent = { 0 };
+                        parent.sta.channel = recs[best].primary;
+                        memcpy(parent.sta.ssid, recs[best].ssid, sizeof(parent.sta.ssid));
+                        parent.sta.bssid_set = 1;
+                        memcpy(parent.sta.bssid, recs[best].bssid, 6);
+                        if (recs[best].authmode != WIFI_AUTH_OPEN)
+                            memcpy(parent.sta.password, s_cfg.router_password,
+                                   strlen(s_cfg.router_password) > sizeof(parent.sta.password) ?
+                                   sizeof(parent.sta.password) : strlen(s_cfg.router_password));
+                        ESP_LOGI(TAG, "root: router %s " MACSTR " channel %u rssi %d: naming it the parent",
+                                 recs[best].ssid, MAC2STR(recs[best].bssid), recs[best].primary, recs[best].rssi);
+                        esp_err_t ret = esp_mesh_set_parent(&parent, NULL, MESH_ROOT, MESH_ROOT_LAYER);
+                        if (ret == ESP_OK) {
+                            free(recs);
+                            vTaskDelete(NULL);
+                            return;
+                        }
+                        ESP_LOGW(TAG, "root: esp_mesh_set_parent: %s", esp_err_to_name(ret));
+                    }
+                }
+                free(recs);
+                recs = NULL;
+            }
+            esp_mesh_flush_scan_result();
+        }
+        if (!fallback) {
+            ESP_LOGW(TAG, "root: router \"%s\" not in range; running as root without router meanwhile", s_cfg.router_ssid);
+            esp_mesh_set_self_organized(true, false);
+            esp_mesh_set_type(MESH_ROOT);
+            esp_mesh_post_toDS_state(true);
+            fallback = true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(60000));
+    }
+    vTaskDelete(NULL);
+}
+
 static void mesh_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     switch (id) {
@@ -347,7 +415,9 @@ static void mesh_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         ESP_LOGI(TAG, "mesh started, %s", s_root ? "root" : "node");
         if (s_root) {
             root_ap_start(s_router ? 0 : s_link_ip.gw.addr);
-            if (!s_router)
+            if (s_router)
+                xTaskCreate(root_router_task, "xwave_root_router", 4096, NULL, 5, NULL);
+            else
                 esp_mesh_post_toDS_state(true);   /* Linux is the DS */
         }
         break;
@@ -470,6 +540,16 @@ static esp_err_t mesh_start(const struct cmd_xwave_mesh *req)
     if (ret != ESP_OK)
         ESP_LOGW(TAG, "esp_wifi_start: %s", esp_err_to_name(ret));
 
+    /* The hosted firmware wraps esp_supplicant_init() (cmd.c, --wrap) so that
+     * Linux's wpa_supplicant does authentication and association through the
+     * host; the mesh needs the ESP's own supplicant for its station and its
+     * AP (seen 2026-11-04: "auth timeout" against the router). Put IDF's back
+     * for the life of the mesh; leaving mesh mode restarts the ESP anyway. */
+    esp_wifi_unregister_wpa_cb_internal();
+    ret = __real_esp_supplicant_init();
+    if (ret != ESP_OK)
+        ESP_LOGW(TAG, "internal supplicant: %s", esp_err_to_name(ret));
+
     ESP_RETURN_ON_ERROR(esp_mesh_init(), TAG, "mesh init");
     ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(MESH_EVENT, ESP_EVENT_ANY_ID, mesh_event, NULL, &s_mesh_evt), TAG, "mesh events");
     ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, ip_event, NULL, &s_ip_evt), TAG, "ip events");
@@ -503,9 +583,13 @@ static esp_err_t mesh_start(const struct cmd_xwave_mesh *req)
 
     if (s_root) {
         ESP_RETURN_ON_ERROR(esp_mesh_fix_root(true), TAG, "fix root");
-        ESP_RETURN_ON_ERROR(esp_mesh_set_type(MESH_ROOT), TAG, "set root");
-        if (s_router)
+        if (s_router) {
+            /* the router is named as the parent after the start (root_router_task) */
+            ESP_RETURN_ON_ERROR(esp_mesh_set_self_organized(false, false), TAG, "manual networking");
             ESP_RETURN_ON_ERROR(root_sta_start(), TAG, "router station");
+        } else {
+            ESP_RETURN_ON_ERROR(esp_mesh_set_type(MESH_ROOT), TAG, "set root");
+        }
     } else {
         esp_mesh_fix_root(false);          /* self-organized, as the H743 nodes */
     }
@@ -537,6 +621,24 @@ esp_err_t xwave_mesh_apply(const struct cmd_xwave_mesh *req)
             xTaskCreate(restart_task, "xwave_mesh_off", 2048, NULL, 5, NULL);
         }
         return ESP_OK;
+    case XWAVE_MESH_SWITCH_IMAGE: {
+        /* the other OTA slot holds the other variant (hosted <-> mesh) when
+         * Linux keeps both there: booting it is a 1 s role switch instead of
+         * a 35 s write; Linux checks `image` after the boot event and writes
+         * the right one if the slot held something else */
+        const esp_partition_t *other = esp_ota_get_next_update_partition(NULL);
+        esp_app_desc_t desc;
+        if (!other || esp_ota_get_partition_description(other, &desc) != ESP_OK) {
+            ESP_LOGW(TAG, "switch image: the other OTA slot holds no valid app");
+            return ESP_ERR_NOT_FOUND;
+        }
+        ESP_LOGW(TAG, "switch image: booting %s (%s, %s)", other->label, desc.project_name, desc.version);
+        if (esp_ota_set_boot_partition(other) != ESP_OK)
+            return ESP_FAIL;
+        s_active = false;
+        xTaskCreate(restart_task, "xwave_mesh_switch", 2048, NULL, 5, NULL);
+        return ESP_OK;
+    }
     case XWAVE_MESH_NODE:
     case XWAVE_MESH_ROOT:
         if (s_active) {
@@ -558,6 +660,11 @@ void xwave_mesh_get_status(struct xwave_mesh_status *st)
     memset(st, 0, sizeof(*st));
     st->mode = s_active ? (s_root ? XWAVE_MESH_ROOT : XWAVE_MESH_NODE) : XWAVE_MESH_OFF;
     st->free_heap = esp_get_free_heap_size();
+#if CONFIG_XWAVE_MESH_IMAGE
+    st->image = 1;
+#else
+    st->image = 0;
+#endif
     if (!s_active)
         return;
     st->is_root = s_root;

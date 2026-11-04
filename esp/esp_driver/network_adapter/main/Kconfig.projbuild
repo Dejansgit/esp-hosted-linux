@@ -142,6 +142,17 @@ menu "Example Configuration"
             int "Routing table size of a root"
             default 50
             depends on XWAVE_MESH
+
+        config XWAVE_MESH_IMAGE
+            bool "This image is linked with ESP-IDF's stock Wi-Fi libraries (the mesh image)"
+            default n
+            depends on XWAVE_MESH
+            help
+                xwave-build.ps1 sets it for the mesh variant, whose station and AP
+                run authentication inside the ESP; the hosted variant (Espressif's
+                patched libraries, n) defers them to the host and cannot mesh. The
+                firmware reports it in the mesh status so Linux flashes the right
+                image for the configured role.
     endmenu
 
     menu "SPI Half-duplex/QIO Configuration"

@@ -15,7 +15,7 @@ endif()
 if(CONFIG_XWAVE_MESH)
     # xWave: ESP-WIFI-MESH mode with the ESP's own TCP/IP stack (docs/WiFi-Plan.md 7.1)
     list(APPEND COMPONENT_SRCS "xwave_mesh.c")
-    list(APPEND COMPONENT_REQUIRES esp_netif lwip esp_event esp_wifi)
+    list(APPEND COMPONENT_REQUIRES esp_netif lwip esp_event esp_wifi app_update)
 endif()
 
 if(CONFIG_ESP_THREAD_RCP_UART)

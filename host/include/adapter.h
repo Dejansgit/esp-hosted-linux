@@ -606,6 +606,7 @@ enum xwave_mesh_mode {
 	XWAVE_MESH_OFF   = 0,   /* hosted service */
 	XWAVE_MESH_NODE  = 1,
 	XWAVE_MESH_ROOT  = 2,
+	XWAVE_MESH_SWITCH_IMAGE = 3, /* boot the other OTA slot (the other variant) and restart */
 	XWAVE_MESH_QUERY = 0xFF /* change nothing, answer the status */
 };
 
@@ -637,6 +638,8 @@ struct xwave_mesh_status {
 	uint8_t    tods_reachable;
 	uint16_t   route_table_size;
 	uint32_t   free_heap;
+	uint8_t    image;                       /* 0 = hosted image (patched Wi-Fi libs), 1 = mesh image (stock libs) */
+	uint8_t    reserved2[3];
 } __packed;
 
 struct fw_data {
