@@ -55,3 +55,9 @@ build-artifacts/
 # Python bytecode/cache artifacts
 __pycache__/
 *.py[cod]
+
+# xWave variant builds (esp/esp_driver/xwave-build.ps1): per-variant build trees, outputs, the mesh config copy
+esp/esp_driver/network_adapter/build-*/
+esp/esp_driver/network_adapter/out/
+esp/esp_driver/network_adapter/sdkconfig.mesh
+esp/esp_driver/network_adapter/dependencies.lock
