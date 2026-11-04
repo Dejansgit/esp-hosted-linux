@@ -269,16 +269,26 @@ int interface_remove_driver()
 }
 
 #if HS_DEASSERT_ON_CS
+/* Runs from IRAM with the ISR service installed with ESP_INTR_FLAG_IRAM, so it
+ * also runs while the firmware writes its flash (an OTA): with the service in
+ * flash the handler was masked for the whole flash write, the handshake stayed
+ * high on CS assert, the host clocked a transaction nobody had armed and read
+ * garbage ("Drop invalid pkt"), and the OTA command of that moment was lost
+ * (seen 2026-11-04, every 977 KB write stalled). Only register reads here. */
 static void IRAM_ATTR gpio_disable_hs_isr_handler(void* arg)
 {
-    int level = gpio_get_level(GPIO_CS);
+    int level = (GPIO_CS < 32) ? ((REG_READ(GPIO_IN_REG) >> GPIO_CS) & 1)
+                               : ((REG_READ(GPIO_IN1_REG) >> (GPIO_CS - 32)) & 1);
     if (level == 0) {
         /* CS is asserted, disable HS */
         hosted_gpio_clear(gpio_handshake);
     } else {
         /* Last transaction complete, populate next one */
+        BaseType_t woken = pdFALSE;
         if (wait_cs_deassert_sem)
-            xSemaphoreGive(wait_cs_deassert_sem);
+            xSemaphoreGiveFromISR(wait_cs_deassert_sem, &woken);
+        if (woken == pdTRUE)
+            portYIELD_FROM_ISR();
     }
 }
 
@@ -295,7 +305,7 @@ static void register_hs_disable_pin(uint32_t gpio_num)
         slave_disable_hs_pin_conf.pull_up_en = 1;
         gpio_config(&slave_disable_hs_pin_conf);
         gpio_set_intr_type(gpio_num, GPIO_INTR_ANYEDGE);
-        gpio_install_isr_service(0);
+        gpio_install_isr_service(ESP_INTR_FLAG_IRAM);   /* must run during flash writes, see the handler */
         gpio_isr_handler_add(gpio_num, gpio_disable_hs_isr_handler, NULL);
     }
 }
