@@ -221,6 +221,7 @@ static ssize_t mesh_debugfs_write(struct file *file, const char __user *ubuf, si
 	req.max_connection = 6;
 	req.max_layer = 6;
 	req.link_prefix = 30;
+	req.flags = XWAVE_MESH_FLAG_FIXED_ROOT;   /* fixed=0 for a mesh of H743 sensors */
 	cur = buf;
 	while ((tok = strsep(&cur, " \t\r\n")) != NULL) {
 		char *val;
@@ -257,6 +258,9 @@ static ssize_t mesh_debugfs_write(struct file *file, const char __user *ubuf, si
 			ret = kstrtouint(val, 10, &n); if (!ret) req.max_layer = n;
 		} else if (!strcmp(tok, "prefix")) {
 			ret = kstrtouint(val, 10, &n); if (!ret) req.link_prefix = n;
+		} else if (!strcmp(tok, "fixed")) {
+			ret = kstrtouint(val, 10, &n);
+			if (!ret) req.flags = n ? (req.flags | XWAVE_MESH_FLAG_FIXED_ROOT) : (req.flags & ~XWAVE_MESH_FLAG_FIXED_ROOT);
 		} else if (!strcmp(tok, "link")) {
 			ret = parse_ip(val, req.link_ip);
 		} else if (!strcmp(tok, "host")) {

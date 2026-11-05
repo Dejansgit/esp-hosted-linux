@@ -274,10 +274,22 @@ extern int wpa_parse_wpa_ie_wrapper(const u8 *wpa_ie, size_t wpa_ie_len, wifi_wp
  * esp_wifi's wifi_init.c) to these no-ops via -Wl,--wrap linker flags.
  * The host drives the supplicant state machine and installs custom callbacks
  * in initialise_wifi(), so the IDF supplicant state machine is not started. */
+#if CONFIG_XWAVE_MESH_IMAGE
+/* xWave mesh image (ESP-IDF's stock Wi-Fi libraries): the ESP's own
+ * supplicant does station and AP authentication for the mesh. Registering
+ * the hosted table on top of it and taking it off again crashes the stock
+ * library (it frees the previous table, and the hosted one is static). */
+esp_err_t __real_esp_supplicant_init(void);
+esp_err_t __wrap_esp_supplicant_init(void)
+{
+    return __real_esp_supplicant_init();
+}
+#else
 esp_err_t __wrap_esp_supplicant_init(void)
 {
     return ESP_OK;
 }
+#endif
 
 esp_err_t __wrap_esp_supplicant_deinit(void)
 {
@@ -733,6 +745,12 @@ static void hosted_mgmt_mark_accepted(uint64_t cookie)
 
 static int mgmt_tx_ensure_cb(void)
 {
+#if CONFIG_XWAVE_MESH_IMAGE
+    /* xWave: the mesh image keeps the stock ieee80211_tx_mgt_cb in slot 2;
+     * the hosted callback only reports to the host and reads the frame
+     * through hosted-only accessors (stubbed in the mesh image). */
+    return ESP_OK;
+#endif
     int ret;
 
     if (s_mgmt_cb_owned)
@@ -2106,7 +2124,9 @@ esp_err_t initialise_wifi(void)
     wpa_cb.wpa_ap_deinit     = hostap_deinit;
     wpa_cb.wpa_ap_rx_mgmt    = handle_wpa_ap_rx_mgmt;
 
-    esp_wifi_register_wpa_cb_internal(&wpa_cb);
+#if !CONFIG_XWAVE_MESH_IMAGE
+    esp_wifi_register_wpa_cb_internal(&wpa_cb);   /* the mesh image keeps IDF's supplicant (see __wrap_esp_supplicant_init) */
+#endif
 
     esp_hosted_sta_enterprise_enable();
 

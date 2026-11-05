@@ -602,6 +602,11 @@ struct fw_version {
 #define XWAVE_MESH_PW_LEN       64
 #define XWAVE_MESH_SSID_LEN     32
 
+/* cmd_xwave_mesh.flags: the root is designated (esp_mesh_fix_root); every
+ * device of a mesh must carry the same setting, the H743 sensors' mesh.bin
+ * does not fix its root, so a root meant for them is started without it */
+#define XWAVE_MESH_FLAG_FIXED_ROOT   0x01
+
 enum xwave_mesh_mode {
 	XWAVE_MESH_OFF   = 0,   /* hosted service */
 	XWAVE_MESH_NODE  = 1,
@@ -620,7 +625,8 @@ struct cmd_xwave_mesh {
 	uint8_t    link_ip[4];                  /* the ESP's address on the link */
 	uint8_t    host_ip[4];                  /* Linux's address, the ESP's gateway without a router */
 	uint8_t    link_prefix;                 /* 30 */
-	uint8_t    reserved[3];
+	uint8_t    flags;                       /* XWAVE_MESH_FLAG_* */
+	uint8_t    reserved[2];
 	char       mesh_password[XWAVE_MESH_PW_LEN];
 	char       router_ssid[XWAVE_MESH_SSID_LEN];
 	char       router_password[XWAVE_MESH_PW_LEN];

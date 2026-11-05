@@ -42,11 +42,6 @@
 
 static const char *TAG = "XWAVE_MESH";
 
-/* cmd.c wraps esp_supplicant_init() with the host-driven supplicant; this is
- * IDF's own, and the unregister of whatever is installed (esp_private) */
-esp_err_t __real_esp_supplicant_init(void);
-int esp_wifi_unregister_wpa_cb_internal(void);
-
 #define MESH_RX_SIZE            1560
 #define LINK_MAX_FRAME          1600
 #define ROUTE_TABLE_MAX         CONFIG_XWAVE_MESH_ROUTE_TABLE_SIZE
@@ -189,6 +184,49 @@ static void mesh_rx_task(void *arg)
                 esp_netif_receive(s_sta, data.data, data.size, NULL);
         }
     }
+    vTaskDelete(NULL);
+}
+
+/* ── the sensors' routing-table message ──────────────────────────────────
+ * The H743 sensors' node firmware (mesh.bin, ESP-IDF 4.3.2's
+ * ip_internal_network) expects the root to send it the routing table as a
+ * binary mesh message, 0x56 followed by the table's station MACs, and
+ * reboots its ESP after 75 s without one (its rtableWD_task). The example's
+ * root sends it from its MQTT task; ours sends it every
+ * ROUTE_TABLE_PERIOD_MS and as soon as a node enters the table. Nodes of
+ * our own firmware ignore binary messages (mesh_rx_task). */
+#define XWAVE_CMD_ROUTE_TABLE   0x56
+#define ROUTE_TABLE_PERIOD_MS   10000
+
+static TaskHandle_t s_route_task;
+
+static void route_table_send(void)
+{
+    static uint8_t payload[1 + ROUTE_TABLE_MAX * 6];
+    mesh_data_t data = { .data = payload, .proto = MESH_PROTO_BIN, .tos = MESH_TOS_P2P };
+    uint8_t self[6];
+    int n = 0;
+
+    if (esp_mesh_get_routing_table(s_route, ROUTE_TABLE_MAX * 6, &n) != ESP_OK || n <= 0)
+        return;
+    esp_wifi_get_mac(WIFI_IF_STA, self);
+    payload[0] = XWAVE_CMD_ROUTE_TABLE;
+    memcpy(payload + 1, s_route, n * 6);
+    data.size = 1 + n * 6;
+    for (int i = 0; i < n; i++) {
+        if (MAC_EQUAL(s_route[i].addr, self))
+            continue;
+        esp_mesh_send(&s_route[i], &data, MESH_DATA_P2P, NULL, 0);
+    }
+}
+
+static void route_table_task(void *arg)
+{
+    while (s_active && s_root) {
+        route_table_send();
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ROUTE_TABLE_PERIOD_MS));   /* a new node wakes it */
+    }
+    s_route_task = NULL;
     vTaskDelete(NULL);
 }
 
@@ -414,6 +452,14 @@ static void mesh_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_layer = esp_mesh_get_layer();
         ESP_LOGI(TAG, "mesh started, %s", s_root ? "root" : "node");
         if (s_root) {
+            /* esp_mesh_start() re-enables self-organized networking: set
+             * before it, the root still hunted its (placeholder) router
+             * every 2.9 s, the radio off the mesh AP each time, and the
+             * nodes lost one packet in three (bench 2026-11-05: 1 kB/s for
+             * two sensors, pings to a node all lost). The manual-networking
+             * example disables it here, in the started event. */
+            esp_mesh_set_self_organized(false, false);
+            esp_wifi_scan_stop();
             root_ap_start(s_router ? 0 : s_link_ip.gw.addr);
             if (s_router)
                 xTaskCreate(root_router_task, "xwave_root_router", 4096, NULL, 5, NULL);
@@ -469,8 +515,11 @@ static void mesh_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         ESP_LOGI(TAG, "network found on channel %u, router " MACSTR, f->channel, MAC2STR(f->router_bssid));
         break;
     }
-    case MESH_EVENT_ROUTER_SWITCH:
     case MESH_EVENT_ROUTING_TABLE_ADD:
+        if (s_route_task)
+            xTaskNotifyGive(s_route_task);     /* the new node gets the table at once */
+        break;
+    case MESH_EVENT_ROUTER_SWITCH:
     case MESH_EVENT_ROUTING_TABLE_REMOVE:
     case MESH_EVENT_SCAN_DONE:
     case MESH_EVENT_NETWORK_STATE:
@@ -540,16 +589,13 @@ static esp_err_t mesh_start(const struct cmd_xwave_mesh *req)
     if (ret != ESP_OK)
         ESP_LOGW(TAG, "esp_wifi_start: %s", esp_err_to_name(ret));
 
-    /* The hosted firmware wraps esp_supplicant_init() (cmd.c, --wrap) so that
-     * Linux's wpa_supplicant does authentication and association through the
-     * host; the mesh needs the ESP's own supplicant for its station and its
-     * AP (seen 2026-11-04: "auth timeout" against the router). Put IDF's back
-     * for the life of the mesh; leaving mesh mode restarts the ESP anyway. */
-    esp_wifi_unregister_wpa_cb_internal();
-    ret = __real_esp_supplicant_init();
-    if (ret != ESP_OK)
-        ESP_LOGW(TAG, "internal supplicant: %s", esp_err_to_name(ret));
-
+#if !CONFIG_XWAVE_MESH_IMAGE
+    /* the hosted image's patched Wi-Fi libraries defer authentication to the
+     * host: no station or AP of the mesh can authenticate (2026-11-04); the
+     * mesh roles need the mesh image (xwave-build.ps1 mesh) */
+    ESP_LOGE(TAG, "this is the hosted image: the mesh needs the mesh image");
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
     ESP_RETURN_ON_ERROR(esp_mesh_init(), TAG, "mesh init");
     ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(MESH_EVENT, ESP_EVENT_ANY_ID, mesh_event, NULL, &s_mesh_evt), TAG, "mesh events");
     ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, ip_event, NULL, &s_ip_evt), TAG, "ip events");
@@ -566,11 +612,15 @@ static esp_err_t mesh_start(const struct cmd_xwave_mesh *req)
         memcpy(cfg.router.ssid, s_cfg.router_ssid, n);
         memcpy(cfg.router.password, s_cfg.router_password, strlen(s_cfg.router_password));
     } else {
-        /* no router at the site: the root never finds this one and stays
-         * on `channel`; Linux is the DS (toDS posted reachable) */
+        /* no router at the site. The stack refuses an empty router SSID
+         * (ESP_ERR_MESH_ARGUMENT), so a placeholder stays; the root's station
+         * then tries it every 3 s on the fixed channel only (no channel
+         * switch, no full scan: the AP stays on `channel`). Linux is the DS
+         * (toDS posted reachable). */
         static const char none[] = "xwave-no-router";
         cfg.router.ssid_len = sizeof(none) - 1;
         memcpy(cfg.router.ssid, none, sizeof(none) - 1);
+        cfg.router.allow_router_switch = false;
         if (!cfg.channel)
             cfg.channel = 6;
     }
@@ -581,21 +631,24 @@ static esp_err_t mesh_start(const struct cmd_xwave_mesh *req)
     memcpy(cfg.mesh_ap.password, s_cfg.mesh_password, n > sizeof(cfg.mesh_ap.password) - 1 ? sizeof(cfg.mesh_ap.password) - 1 : n);
     ESP_RETURN_ON_ERROR(esp_mesh_set_config(&cfg), TAG, "mesh config");
 
+    /* the same fixed-root setting on every device of a mesh: the H743
+     * sensors' mesh.bin runs without it, so a root for them is not fixed */
+    ESP_RETURN_ON_ERROR(esp_mesh_fix_root((req->flags & XWAVE_MESH_FLAG_FIXED_ROOT) != 0), TAG, "fix root");
     if (s_root) {
-        ESP_RETURN_ON_ERROR(esp_mesh_fix_root(true), TAG, "fix root");
-        if (s_router) {
-            /* the router is named as the parent after the start (root_router_task) */
-            ESP_RETURN_ON_ERROR(esp_mesh_set_self_organized(false, false), TAG, "manual networking");
+        /* manual networking for the root either way: with a router it is named
+         * as the parent after the start (root_router_task); without one the
+         * root must not hunt for the placeholder SSID (a self-organized root
+         * scanned every 3 s, its AP off-channel each time, 2026-11-05) */
+        ESP_RETURN_ON_ERROR(esp_mesh_set_self_organized(false, false), TAG, "manual networking");
+        ESP_RETURN_ON_ERROR(esp_mesh_set_type(MESH_ROOT), TAG, "set root");
+        if (s_router)
             ESP_RETURN_ON_ERROR(root_sta_start(), TAG, "router station");
-        } else {
-            ESP_RETURN_ON_ERROR(esp_mesh_set_type(MESH_ROOT), TAG, "set root");
-        }
-    } else {
-        esp_mesh_fix_root(false);          /* self-organized, as the H743 nodes */
     }
     ESP_RETURN_ON_ERROR(link_start(), TAG, "link");
     s_active = true;
     ESP_RETURN_ON_ERROR(esp_mesh_start(), TAG, "mesh start");
+    if (s_root && !s_route_task)
+        xTaskCreate(route_table_task, "xwave_mesh_rt", 2048, NULL, 5, &s_route_task);
     ESP_LOGI(TAG, "mesh %s started: id %02x%02x%02x%02x%02x%02x, channel %u, %s, heap %lu",
              s_root ? "root" : "node", req->mesh_id[0], req->mesh_id[1], req->mesh_id[2],
              req->mesh_id[3], req->mesh_id[4], req->mesh_id[5], cfg.channel,

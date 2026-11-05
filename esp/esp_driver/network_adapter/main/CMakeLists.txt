@@ -14,7 +14,7 @@ endif()
 
 if(CONFIG_XWAVE_MESH)
     # xWave: ESP-WIFI-MESH mode with the ESP's own TCP/IP stack (docs/WiFi-Plan.md 7.1)
-    list(APPEND COMPONENT_SRCS "xwave_mesh.c")
+    list(APPEND COMPONENT_SRCS "xwave_mesh.c" "xwave_mesh_stubs.c")
     list(APPEND COMPONENT_REQUIRES esp_netif lwip esp_event esp_wifi app_update)
 endif()
 
@@ -49,7 +49,18 @@ if(CONFIG_ESP_HOST_WIFI_ENABLED)
 endif()
 get_filename_component(_hosted_wifi_lib_dir
     "${CMAKE_CURRENT_LIST_DIR}/../../lib/${_hosted_wifi_target}" ABSOLUTE)
-foreach(_blob core espnow mesh net80211 pp smartconfig wapi target)
+# xWave: the mesh image links ESP-IDF's stock archives instead (the ones the
+# submodule holds after `git submodule update --force`, see xwave-build.ps1):
+# only they run the station/AP authentication and build the AP beacons inside
+# the ESP; the hosted archives wait for the host to do both, so a mesh root
+# linked with them never beacons and no node can find it (2026-11-05).
+if(CONFIG_XWAVE_MESH_IMAGE)
+    set(_hosted_wifi_blobs)
+    message(STATUS "xWave mesh image: ESP-IDF's stock Wi-Fi archives")
+else()
+    set(_hosted_wifi_blobs core espnow mesh net80211 pp smartconfig wapi target)
+endif()
+foreach(_blob ${_hosted_wifi_blobs})
     if(TARGET esp_wifi_${_blob})
         set(_archive "${_hosted_wifi_lib_dir}/lib${_blob}.a")
         if(NOT EXISTS "${_archive}")
