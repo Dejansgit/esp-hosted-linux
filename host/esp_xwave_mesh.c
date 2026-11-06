@@ -145,7 +145,11 @@ int esp_xwave_mesh_init(struct esp_adapter *adapter)
 	p->adapter = adapter;
 	ndev->netdev_ops = &mesh_ndev_ops;
 	ndev->needed_headroom = roundup(sizeof(struct esp_payload_header) + INTERFACE_HEADER_PADDING, 4);
-	ndev->mtu = ETH_DATA_LEN;
+	/* The firmware hands each of mesh0's frames to esp_mesh_send() whole, so a
+	 * frame may carry at most MESH_MPS (1472) bytes, Ethernet header included:
+	 * 1458 bytes of IP. A larger packet is dropped by the ESP and TCP stalls
+	 * (measured 2026-11-06 on an Edge node: 1458 passes, 1459 is lost). */
+	ndev->mtu = 1472 - ETH_HLEN;
 	eth_hw_addr_random(ndev);
 	ndev->priv_flags |= IFF_NO_QUEUE;
 	ret = register_netdev(ndev);
@@ -318,13 +322,13 @@ static ssize_t mesh_debugfs_read(struct file *file, char __user *ubuf, size_t co
 		n = scnprintf(out, sizeof(out), "mode=unknown error=%d\n", ret);
 	else
 		n = scnprintf(out, sizeof(out),
-			      "image=%s mode=%s root=%u layer=%u parent_connected=%u parent=%pM mesh_ip=%pI4 router_ip=%pI4 children=%u route_table=%u tods=%u free_heap=%u\n",
+			      "image=%s mode=%s root=%u layer=%u parent_connected=%u parent=%pM mesh_ip=%pI4 router_ip=%pI4 children=%u route_table=%u tods=%u free_heap=%u rssi=%d self=%pM\n",
 			      st.image ? "mesh" : "hosted",
 			      st.mode == XWAVE_MESH_OFF ? "off" : st.mode == XWAVE_MESH_NODE ? "node" :
 			      st.mode == XWAVE_MESH_ROOT ? "root" : "?",
 			      st.is_root, st.layer, st.parent_connected, st.parent, st.mesh_ip, st.router_ip,
 			      st.children, le16_to_cpu(st.route_table_size), st.tods_reachable,
-			      le32_to_cpu(st.free_heap));
+			      le32_to_cpu(st.free_heap), st.rssi, st.self);
 	return simple_read_from_buffer(ubuf, count, ppos, out, n);
 }
 

@@ -35,6 +35,7 @@
 #include "esp_mac.h"
 #include "esp_ota_ops.h"
 #include "lwip/lwip_napt.h"
+#include "lwip/prot/ip.h"                   /* IP_PROTO_TCP for the NAT port map */
 #include "dhcpserver/dhcpserver.h"
 #include "interface.h"
 #include "adapter.h"
@@ -544,6 +545,17 @@ static void ip_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         esp_netif_dns_info_t dns;
         s_router_ip4 = e->ip_info.ip.addr;
         ESP_LOGI(TAG, "root: router gave " IPSTR, IP2STR(&e->ip_info.ip));
+        /* The Linux side reachable from the router's network: the router's
+         * address belongs to this station, nothing listens on the ESP, so a
+         * connection arriving here on the UIs' ports (the VoyagerLite on 80,
+         * the sensor UI on 8080) or ssh is forwarded through the NAT to Linux.
+         * Keyed by port: a new address from the router replaces the entry. */
+        {
+            static const uint16_t ports[] = { 22, 80, 8080 };
+            for (size_t i = 0; i < sizeof(ports) / sizeof(ports[0]); i++)
+                if (!ip_portmap_add(IP_PROTO_TCP, s_router_ip4, ports[i], s_link_ip.gw.addr, ports[i]))
+                    ESP_LOGW(TAG, "root: no room in the NAT port map for port %u", ports[i]);
+        }
         esp_netif_get_dns_info(e->esp_netif, ESP_NETIF_DNS_MAIN, &dns);
         root_ap_start(dns.ip.u_addr.ip4.addr ? dns.ip.u_addr.ip4.addr : s_link_ip.gw.addr);
     } else {
@@ -727,6 +739,13 @@ void xwave_mesh_get_status(struct xwave_mesh_status *st)
     memcpy(st->mesh_ip, &s_mesh_ip4, 4);
     memcpy(st->router_ip, &s_router_ip4, 4);
     st->tods_reachable = s_tods;
+    {   /* the station link's signal: a node's parent, a root's router (the sensors' heartbeat
+         * carries it as M_Signal and Voyager draws it on the mesh tree's edges) */
+        wifi_ap_record_t ap;
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
+            st->rssi = ap.rssi;
+    }
+    esp_wifi_get_mac(WIFI_IF_AP, st->self);     /* the mesh AP a child connects to: its parent's BSSID */
     if (s_root && esp_mesh_get_routing_table(s_route, ROUTE_TABLE_MAX * 6, &n) == ESP_OK) {
         st->route_table_size = n;
         st->children = n > 0 ? n - 1 : 0;

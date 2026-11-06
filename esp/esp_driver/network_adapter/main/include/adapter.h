@@ -645,7 +645,9 @@ struct xwave_mesh_status {
 	uint16_t   route_table_size;
 	uint32_t   free_heap;
 	uint8_t    image;                       /* 0 = hosted image (patched Wi-Fi libs), 1 = mesh image (stock libs) */
-	uint8_t    reserved2[3];
+	int8_t     rssi;                        /* the station link's RSSI in dBm: a node's parent, a root's router; 0 unconnected */
+	uint8_t    reserved2[2];
+	uint8_t    self[6];                     /* the ESP's AP MAC: what its children name as their parent (the heartbeat's M_Self) */
 } __packed;
 
 struct fw_data {
