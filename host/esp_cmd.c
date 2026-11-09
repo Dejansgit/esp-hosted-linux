@@ -931,10 +931,25 @@ static int decode_xwave_mesh(struct command_node *cmd_node)
 		esp_info("xwave mesh command refused by the firmware\n");
 		ret = -EIO;
 	}
-	if (cmd_node->resp_skb->len >= sizeof(*h) + sizeof(s_xwave_mesh_status) &&
-	    esp_wire_le16_to_cpu(h->len) >= sizeof(s_xwave_mesh_status))
-		memcpy(&s_xwave_mesh_status, cmd_node->resp_skb->data + sizeof(*h),
-		       sizeof(s_xwave_mesh_status));
+	/* The firmware answers with its own struct xwave_mesh_status, success or
+	 * not. Take what came: a firmware older than this module sends a shorter
+	 * one, and the fields it does not know read zero; a newer one sends more,
+	 * and the tail is dropped. Before 2026-11-09 an answer shorter than our
+	 * struct was ignored and the previous status stayed, so the two had to be
+	 * of the same fork commit. */
+	{
+		size_t have = cmd_node->resp_skb->len - sizeof(*h);
+		size_t n = esp_wire_le16_to_cpu(h->len);
+
+		if (n > have)
+			n = have;
+		if (n > sizeof(s_xwave_mesh_status))
+			n = sizeof(s_xwave_mesh_status);
+		if (n) {
+			memset(&s_xwave_mesh_status, 0, sizeof(s_xwave_mesh_status));
+			memcpy(&s_xwave_mesh_status, cmd_node->resp_skb->data + sizeof(*h), n);
+		}
+	}
 	return ret;
 }
 
