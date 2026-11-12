@@ -596,7 +596,11 @@ struct fw_version {
  * out through the node's mesh address. Root: owns the group on `channel`
  * (router_ssid empty = no router at the site, Linux is the mesh's upstream;
  * router_ssid set = the root also joins that router as a station and gets
- * Linux a Wi-Fi uplink). The response carries xwave_mesh_status.
+ * Linux a Wi-Fi uplink, looked for all the time and joined whenever it is
+ * there; `channel` is then the channel without it). A node with router_ssid
+ * set is a sensor that takes part in the group's election as the H743 sensors
+ * do and is the root while it wins (2026-11-12, xwave_mesh.c). The response
+ * carries xwave_mesh_status.
  * docs/WiFi-Plan.md 7.1. */
 #define XWAVE_MESH_ID_LEN       6
 #define XWAVE_MESH_PW_LEN       64
@@ -618,7 +622,7 @@ enum xwave_mesh_mode {
 struct cmd_xwave_mesh {
 	struct command_header header;
 	uint8_t    mode;                        /* enum xwave_mesh_mode */
-	uint8_t    channel;                     /* root: 1-13; 0 = follow the router */
+	uint8_t    channel;                     /* root: 1-13, the channel without a router (0 = 6); node: 0 = look on every channel */
 	uint8_t    max_connection;              /* children per node (H743: 6) */
 	uint8_t    max_layer;                   /* H743: 6 */
 	uint8_t    mesh_id[XWAVE_MESH_ID_LEN];

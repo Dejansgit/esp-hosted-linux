@@ -88,3 +88,15 @@ target_include_directories(${COMPONENT_LIB} PRIVATE "${protocomm_dir}/src/common
 target_link_libraries(${COMPONENT_LIB} INTERFACE
     "-Wl,--wrap=esp_supplicant_init"
     "-Wl,--wrap=esp_supplicant_deinit")
+
+# xWave: in the mesh image the Wi-Fi AP must not forward a plain station's
+# frames to the other stations (a plain group-addressed frame on the mesh AP
+# stops the mesh children); the library's forwarding call is taken over by
+# __wrap_ieee80211_output in xwave_mesh.c, which explains it. And a device that
+# admits a phone keeps its beacon interval at 100 ms (the mesh stack's
+# stretching of it drops a plain station): __wrap_esp_wifi_set_beacon_interval.
+if(CONFIG_XWAVE_MESH_IMAGE)
+    target_link_libraries(${COMPONENT_LIB} INTERFACE
+        "-Wl,--wrap=ieee80211_output"
+        "-Wl,--wrap=esp_wifi_set_beacon_interval")
+endif()
